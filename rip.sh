@@ -1,212 +1,212 @@
 #!/bin/bash
-# rip.sh – CD-Ripping-Skript für Linux/Manjaro
-# Rippt eine Audio-CD mit abcde und encodiert zu Opus
-# Verwendung: ./rip.sh [AUSGABEVERZEICHNIS]
-#   AUSGABEVERZEICHNIS: Zielordner für Opus-Dateien (Standard: aktuelles Verzeichnis)
+# rip.sh – CD ripping script for Linux/Manjaro
+# Rips an audio CD using abcde and encodes to Opus
+# Usage: ./rip.sh [OUTPUT_DIRECTORY]
+#   OUTPUT_DIRECTORY: target folder for Opus files (default: current directory)
 
 set -euo pipefail
 
-# ─── Farben ───────────────────────────────────────────────────────────────────
-ROT='\033[0;31m'
-GELB='\033[1;33m'
-GRUEN='\033[0;32m'
-BLAU='\033[0;34m'
-FETT='\033[1m'
+# ─── Colors ───────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
 RESET='\033[0m'
 
-# ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
-fehler() {
-    echo -e "${ROT}✗ FEHLER:${RESET} $*" >&2
+# ─── Helper functions ─────────────────────────────────────────────────────────
+error() {
+    echo -e "${RED}✗ ERROR:${RESET} $*" >&2
 }
 
-warnung() {
-    echo -e "${GELB}⚠ WARNUNG:${RESET} $*"
+warning() {
+    echo -e "${YELLOW}⚠ WARNING:${RESET} $*"
 }
 
 info() {
-    echo -e "${BLAU}→${RESET} $*"
+    echo -e "${BLUE}→${RESET} $*"
 }
 
-erfolg() {
-    echo -e "${GRUEN}✓${RESET} $*"
+success() {
+    echo -e "${GREEN}✓${RESET} $*"
 }
 
-trennlinie() {
-    echo -e "${BLAU}────────────────────────────────────────────────────────${RESET}"
+separator() {
+    echo -e "${BLUE}────────────────────────────────────────────────────────${RESET}"
 }
 
-# Sekunden in "M:SS" bzw. "H:MM:SS" formatieren
-formatiere_dauer() {
-    local sekunden=$1
-    local stunden=$(( sekunden / 3600 ))
-    local minuten=$(( (sekunden % 3600) / 60 ))
-    local sek=$(( sekunden % 60 ))
-    if (( stunden > 0 )); then
-        printf "%d:%02d:%02d" "$stunden" "$minuten" "$sek"
+# Format seconds as "M:SS" or "H:MM:SS"
+format_duration() {
+    local seconds=$1
+    local hours=$(( seconds / 3600 ))
+    local minutes=$(( (seconds % 3600) / 60 ))
+    local secs=$(( seconds % 60 ))
+    if (( hours > 0 )); then
+        printf "%d:%02d:%02d" "$hours" "$minutes" "$secs"
     else
-        printf "%d:%02d" "$minuten" "$sek"
+        printf "%d:%02d" "$minutes" "$secs"
     fi
 }
 
-# Menschenlesbare Dateigröße (Datei oder Verzeichnis)
-dateigrösse() {
-    local pfad="$1"
-    if [[ -f "$pfad" || -d "$pfad" ]]; then
-        du -sh "$pfad" 2>/dev/null | cut -f1
+# Human-readable size of a file or directory
+file_size() {
+    local path="$1"
+    if [[ -f "$path" || -d "$path" ]]; then
+        du -sh "$path" 2>/dev/null | cut -f1
     else
         echo "?"
     fi
 }
 
-# ─── Cleanup beim Beenden ─────────────────────────────────────────────────────
+# ─── Cleanup on exit ──────────────────────────────────────────────────────────
 ABCDE_CONF_BACKUP=""
-ABCDE_CONF_NEU_ERSTELLT=false
+ABCDE_CONF_CREATED=false
 
 cleanup() {
     local exit_code=$?
     if [[ -n "$ABCDE_CONF_BACKUP" && -f "$ABCDE_CONF_BACKUP" ]]; then
         mv "$ABCDE_CONF_BACKUP" "$HOME/.abcde.conf"
-        info "Originale ~/.abcde.conf wiederhergestellt."
-    elif [[ "$ABCDE_CONF_NEU_ERSTELLT" == true && -f "$HOME/.abcde.conf" ]]; then
+        info "Original ~/.abcde.conf restored."
+    elif [[ "$ABCDE_CONF_CREATED" == true && -f "$HOME/.abcde.conf" ]]; then
         rm -f "$HOME/.abcde.conf"
     fi
     exit $exit_code
 }
 trap cleanup EXIT
 
-# ─── Abhängigkeitsprüfung ─────────────────────────────────────────────────────
-pruefe_abhaengigkeiten() {
-    # Tool → Paketname (pacman, offizielle Repos)
+# ─── Dependency check ─────────────────────────────────────────────────────────
+check_dependencies() {
+    # Tool → package name (pacman, official repos)
     local tools=("abcde" "opusenc" "cdparanoia" "cd-discid" "wget" "eject" "python3")
-    local pakete=("abcde" "opus-tools" "cdparanoia" "cd-discid" "wget" "eject" "python")
+    local packages=("abcde" "opus-tools" "cdparanoia" "cd-discid" "wget" "eject" "python")
 
-    local fehler_gefunden=false
-    local fehlende_tools=()
-    local fehlende_pakete=()
+    local errors_found=false
+    local missing_tools=()
+    local missing_packages=()
 
     for i in "${!tools[@]}"; do
         if ! command -v "${tools[$i]}" &>/dev/null; then
-            fehlende_tools+=("${tools[$i]}")
-            fehlende_pakete+=("${pakete[$i]}")
-            fehler_gefunden=true
+            missing_tools+=("${tools[$i]}")
+            missing_packages+=("${packages[$i]}")
+            errors_found=true
         fi
     done
 
-    if [[ "$fehler_gefunden" == true ]]; then
-        fehler "Folgende benötigte Programme sind nicht installiert:"
+    if [[ "$errors_found" == true ]]; then
+        error "The following required programs are not installed:"
         echo ""
-        for i in "${!fehlende_tools[@]}"; do
-            echo -e "  ${FETT}${fehlende_tools[$i]}${RESET} → ${GELB}sudo pacman -S ${fehlende_pakete[$i]}${RESET}"
+        for i in "${!missing_tools[@]}"; do
+            echo -e "  ${BOLD}${missing_tools[$i]}${RESET} → ${YELLOW}sudo pacman -S ${missing_packages[$i]}${RESET}"
         done
         echo ""
-        info "Alle fehlenden Programme auf einmal installieren:"
-        local pakete_liste="${fehlende_pakete[*]}"
-        echo -e "  ${GELB}sudo pacman -S ${pakete_liste}${RESET}"
+        info "Install all missing programs at once:"
+        local packages_list="${missing_packages[*]}"
+        echo -e "  ${YELLOW}sudo pacman -S ${packages_list}${RESET}"
         echo ""
         exit 1
     fi
 
-    # Python-Modul mutagen prüfen (zum Tagging der kombinierten Opus-Datei)
+    # Check Python module mutagen (used for tagging the combined Opus file)
     if ! python3 -c 'import mutagen.oggopus' &>/dev/null; then
-        fehler "Python-Modul ${FETT}mutagen${RESET}${ROT} fehlt."
+        error "Python module ${BOLD}mutagen${RESET}${RED} is missing."
         echo ""
-        echo -e "  Installation: ${GELB}sudo pacman -S python-mutagen${RESET}"
+        echo -e "  Install with: ${YELLOW}sudo pacman -S python-mutagen${RESET}"
         echo ""
         exit 1
     fi
 
-    erfolg "Alle benötigten Programme sind installiert."
+    success "All required programs are installed."
 }
 
-# ─── Perl-Module für Multi-Track-Modus prüfen ────────────────────────────────
-# Im Einzeldatei-Modus wird abcde-musicbrainz-tool nicht aufgerufen,
-# daher sind diese Module dort nicht nötig.
-pruefe_perl_module() {
-    local perl_module_fehlen=false
+# ─── Perl module check for multi-track mode ───────────────────────────────────
+# In single-file mode abcde-musicbrainz-tool is not called,
+# so these modules are not needed there.
+check_perl_modules() {
+    local perl_modules_missing=false
     if ! perl -e 'use MusicBrainz::DiscID' &>/dev/null; then
-        perl_module_fehlen=true
+        perl_modules_missing=true
     fi
     if ! perl -e 'use WebService::MusicBrainz' &>/dev/null; then
-        perl_module_fehlen=true
+        perl_modules_missing=true
     fi
-    if [[ "$perl_module_fehlen" == true ]]; then
-        fehler "Fehlende Perl-Module für abcde-musicbrainz-tool."
+    if [[ "$perl_modules_missing" == true ]]; then
+        error "Missing Perl modules for abcde-musicbrainz-tool."
         echo ""
-        echo -e "  ${FETT}MusicBrainz::DiscID${RESET}  und/oder  ${FETT}WebService::MusicBrainz${RESET}"
-        echo -e "  werden von abcde für Track-Metadaten im Mehrspurdatei-Modus benötigt."
+        echo -e "  ${BOLD}MusicBrainz::DiscID${RESET}  and/or  ${BOLD}WebService::MusicBrainz${RESET}"
+        echo -e "  are required by abcde for track metadata in multi-track mode."
         echo ""
-        echo -e "  Installation über AUR (eines der folgenden):"
-        echo -e "    ${GELB}pamac install perl-musicbrainz-discid perl-webservice-musicbrainz${RESET}"
-        echo -e "    ${GELB}yay -S perl-musicbrainz-discid perl-webservice-musicbrainz${RESET}"
-        echo -e "    ${GELB}paru -S perl-musicbrainz-discid perl-webservice-musicbrainz${RESET}"
+        echo -e "  Install via AUR (one of the following):"
+        echo -e "    ${YELLOW}pamac install perl-musicbrainz-discid perl-webservice-musicbrainz${RESET}"
+        echo -e "    ${YELLOW}yay -S perl-musicbrainz-discid perl-webservice-musicbrainz${RESET}"
+        echo -e "    ${YELLOW}paru -S perl-musicbrainz-discid perl-webservice-musicbrainz${RESET}"
         echo ""
         exit 1
     fi
 }
 
-# ─── CD-Laufwerk finden ───────────────────────────────────────────────────────
-finde_laufwerk() {
-    local kandidaten=("/dev/cdrom" "/dev/sr0" "/dev/sr1" "/dev/sr2")
+# ─── Find CD drive ────────────────────────────────────────────────────────────
+find_drive() {
+    local candidates=("/dev/cdrom" "/dev/sr0" "/dev/sr1" "/dev/sr2")
 
-    for geraet in "${kandidaten[@]}"; do
-        if [[ -b "$geraet" ]]; then
-            echo "$geraet"
+    for device in "${candidates[@]}"; do
+        if [[ -b "$device" ]]; then
+            echo "$device"
             return 0
         fi
     done
 
-    fehler "Kein CD-ROM-Laufwerk gefunden."
+    error "No CD-ROM drive found."
     echo ""
-    info "Geprüfte Gerätedateien: ${kandidaten[*]}"
-    info "Mögliche Ursachen:"
-    echo "  • Kein optisches Laufwerk angeschlossen oder erkannt"
-    echo "  • Laufwerk hat einen anderen Gerätenamen"
-    echo "    Prüfen mit: ls /dev/sr* /dev/cdrom 2>/dev/null"
-    echo "  • Kernel-Modul nicht geladen"
-    echo "    Prüfen mit: lsmod | grep -i cdrom"
+    info "Checked device files: ${candidates[*]}"
+    info "Possible causes:"
+    echo "  • No optical drive connected or detected"
+    echo "  • Drive has a different device name"
+    echo "    Check with: ls /dev/sr* /dev/cdrom 2>/dev/null"
+    echo "  • Kernel module not loaded"
+    echo "    Check with: lsmod | grep -i cdrom"
     exit 1
 }
 
-# ─── CD-Medium prüfen ─────────────────────────────────────────────────────────
-pruefe_medium() {
-    local geraet="$1"
+# ─── Check CD medium ──────────────────────────────────────────────────────────
+check_medium() {
+    local device="$1"
 
-    info "Prüfe ob eine CD eingelegt ist in ${FETT}${geraet}${RESET} ..."
+    info "Checking for audio CD in ${BOLD}${device}${RESET} ..."
 
-    if ! cd-discid "$geraet" &>/dev/null; then
-        fehler "Keine Audio-CD in ${geraet} gefunden."
+    if ! cd-discid "$device" &>/dev/null; then
+        error "No audio CD found in ${device}."
         echo ""
-        info "Mögliche Ursachen:"
-        echo "  • Kein Datenträger eingelegt → CD einlegen und Skript erneut starten"
-        echo "  • Datenträger ist keine Audio-CD (z.B. DVD oder Daten-CD)"
-        echo "  • Laufwerk reagiert nicht → Laufwerk auswerfen und CD neu einlegen"
-        echo "  • Fehlende Leseberechtigung:"
-        echo "    Prüfen mit: ls -la ${geraet}"
-        echo "    Benutzer zur Gruppe 'optical' hinzufügen: sudo usermod -aG optical \$USER"
-        echo "    (danach neu anmelden)"
+        info "Possible causes:"
+        echo "  • No disc inserted → insert CD and restart the script"
+        echo "  • Disc is not an audio CD (e.g. DVD or data CD)"
+        echo "  • Drive not responding → eject and reinsert the CD"
+        echo "  • Missing read permission:"
+        echo "    Check with: ls -la ${device}"
+        echo "    Add user to 'optical' group: sudo usermod -aG optical \$USER"
+        echo "    (then log out and back in)"
         exit 1
     fi
 
-    erfolg "Audio-CD erkannt."
+    success "Audio CD detected."
 }
 
-# ─── MusicBrainz-Titelsuche ───────────────────────────────────────────────────
-# Gibt "TITEL\tKÜNSTLER" aus (tab-getrennt) oder nichts bei Fehler.
-# Berechnet die MusicBrainz-Disc-ID aus der cdparanoia-TOC (kein extra Tool nötig).
-ermittle_mb_info() {
-    local geraet="$1"
+# ─── MusicBrainz title lookup ─────────────────────────────────────────────────
+# Outputs "TITLE\tARTIST" (tab-separated) or nothing on failure.
+# Calculates the MusicBrainz disc ID from the cdparanoia TOC (no extra tool needed).
+get_mb_info() {
+    local device="$1"
     local toc_output
 
-    toc_output=$(cdparanoia -Q -d "$geraet" 2>&1) || return 1
+    toc_output=$(cdparanoia -Q -d "$device" 2>&1) || return 1
 
-    # Python (stdlib) berechnet MB-Disc-ID und fragt die API ab
+    # Python (stdlib) calculates MB disc ID and queries the API
     TOC_DATA="$toc_output" python3 << 'PYEOF'
 import os, re, hashlib, base64, json, sys
 import urllib.request, urllib.error
 
 toc_text = os.environ.get("TOC_DATA", "")
 
-# cdparanoia -Q Ausgabe parsen
+# Parse cdparanoia -Q output
 # Format: "  1.    17640 [03:55.15]        0 [00:00.00]    no   no  2"
 track_re = re.compile(
     r"^\s+(\d+)\.\s+(\d+)\s+\[[\d:\.]+\]\s+(\d+)\s+",
@@ -223,7 +223,7 @@ last_track  = track_data[-1][0]
 leadout     = track_data[-1][2] + track_data[-1][1] + 150
 offsets     = [begin + 150 for _, _, begin in track_data]
 
-# MusicBrainz-Disc-ID: SHA-1 über TOC-Daten, base64-kodiert
+# MusicBrainz disc ID: SHA-1 over TOC data, base64-encoded
 data = "%02X%02X" % (first_track, last_track)
 data += "%08X" % leadout
 for i in range(99):
@@ -233,7 +233,7 @@ digest  = hashlib.sha1(data.encode("ascii")).digest()
 b64     = base64.b64encode(digest).decode("ascii")
 disc_id = b64.replace("+", ".").replace("/", "_").replace("=", "-")
 
-# MusicBrainz-API abfragen
+# Query MusicBrainz API
 url = "https://musicbrainz.org/ws/2/discid/" + disc_id + "?fmt=json&inc=artist-credits"
 req = urllib.request.Request(
     url,
@@ -247,7 +247,7 @@ try:
         sys.exit(1)
     release = releases[0]
     title   = release.get("title", "")
-    # Interpreten-Namen zusammensetzen
+    # Assemble artist name
     artists = release.get("artist-credit", [])
     artist_parts = []
     for a in artists:
@@ -265,10 +265,10 @@ except Exception:
 PYEOF
 }
 
-# ─── Titel für Dateisystem bereinigen ────────────────────────────────────────
-bereinige_titel() {
-    local titel="$1"
-    echo "$titel" \
+# ─── Sanitize title for filesystem ────────────────────────────────────────────
+sanitize_title() {
+    local title="$1"
+    echo "$title" \
         | tr '/' '-' \
         | tr ':' '_' \
         | sed 's/[[:space:]]\+/_/g' \
@@ -278,315 +278,348 @@ bereinige_titel() {
         | sed 's/_\+/_/g'
 }
 
-# ─── abcde-Konfiguration schreiben ────────────────────────────────────────────
-schreibe_abcde_config() {
+# ─── Write abcde configuration ────────────────────────────────────────────────
+write_abcde_config() {
     local safe_title="$1"
-    local einzeldatei="$2"
-    local ausgabeverzeichnis="$3"
-    local cpu_kerne
-    cpu_kerne=$(nproc)
+    local single_file="$2"
+    local output_dir="$3"
+    local cpu_cores
+    cpu_cores=$(nproc)
 
-    # Bestehende Konfiguration sichern
+    # Back up existing configuration
     if [[ -f "$HOME/.abcde.conf" ]]; then
         ABCDE_CONF_BACKUP=$(mktemp "${HOME}/.abcde.conf.bak.XXXXXX")
         cp "$HOME/.abcde.conf" "$ABCDE_CONF_BACKUP"
-        info "Bestehende ~/.abcde.conf gesichert als $(basename "$ABCDE_CONF_BACKUP")"
+        info "Existing ~/.abcde.conf backed up as $(basename "$ABCDE_CONF_BACKUP")"
     else
-        ABCDE_CONF_NEU_ERSTELLT=true
+        ABCDE_CONF_CREATED=true
     fi
 
-    # Modus-abhängige Einstellungen
-    local format_zeile cddb_zeilen actions_zeile
-    if [[ "$einzeldatei" == true ]]; then
-        # Kein MusicBrainz-Aufruf – Metadaten werden nach dem Rippen per opustags gesetzt
-        format_zeile="ONETRACKOUTPUTFORMAT='${safe_title}'"
-        cddb_zeilen="NOCDDBQUERY=y
+    # Mode-specific settings
+    local format_line cddb_lines actions_line
+    if [[ "$single_file" == true ]]; then
+        # No MusicBrainz call – metadata is set after ripping via mutagen
+        format_line="ONETRACKOUTPUTFORMAT='${safe_title}'"
+        cddb_lines="NOCDDBQUERY=y
 INTERACTIVE=n"
-        actions_zeile="ACTIONS=read,encode,move,clean"
+        actions_line="ACTIONS=read,encode,move,clean"
     else
-        format_zeile="OUTPUTFORMAT='${safe_title}/\${TRACKNUM}.\${TRACKFILE}'"
-        cddb_zeilen="CDDBMETHOD=musicbrainz"
-        actions_zeile="ACTIONS=cddb,read,encode,tag,move,clean"
+        format_line="OUTPUTFORMAT='${safe_title}/\${TRACKNUM}.\${TRACKFILE}'"
+        cddb_lines="CDDBMETHOD=musicbrainz"
+        actions_line="ACTIONS=cddb,read,encode,tag,move,clean"
     fi
 
     cat > "$HOME/.abcde.conf" << EOF
-# Temporäre abcde-Konfiguration – erstellt von rip.sh
-# Wird nach dem Rippen automatisch entfernt/wiederhergestellt.
+# Temporary abcde configuration – created by rip.sh
+# Will be automatically removed/restored after ripping.
 
-# Metadaten-Quelle
-${cddb_zeilen}
+# Metadata source
+${cddb_lines}
 
-# Ausgabeformat
+# Output format
 OUTPUTTYPE=opus
 OPUSENCODERSYNTAX=default
 OPUSENCOPTS="--bitrate 192"
 
-# Ausgabeverzeichnis und Dateinamensformat
-OUTPUTDIR="${ausgabeverzeichnis}"
-${format_zeile}
+# Output directory and filename format
+OUTPUTDIR="${output_dir}"
+${format_line}
 
-# Performance: alle ${cpu_kerne} CPU-Kerne nutzen, parallel lesen+kodieren
-MAXPROCS=${cpu_kerne}
+# Performance: use all ${cpu_cores} CPU cores, parallel read+encode
+MAXPROCS=${cpu_cores}
 LOWDISK=n
 READNICE=0
 ENCNICE=0
 
-# Qualität und Verhalten
+# Quality and behaviour
 PADTRACKS=y
 EJECTCD=y
 EXTRAVERBOSE=1
 
-# CD-Leser (cdparanoia mit Standard-Fehlerkorrektur)
+# CD reader (cdparanoia with standard error correction)
 CDROMREADERSYNTAX=cdparanoia
 CDPARANOIAOPTS=""
 
-# Aktionen
-${actions_zeile}
+# Actions
+${actions_line}
 EOF
 }
 
-# ─── Opus-Metadaten setzen (Einzeldatei-Modus) ───────────────────────────────
-# Verwendet python-mutagen: schreibt Ogg Vorbis Comments direkt in die Datei.
-setze_opus_metadaten() {
-    local datei="$1"
-    local titel="$2"
-    local kuenstler="$3"
+# ─── Set Opus metadata (single-file mode) ────────────────────────────────────
+# Uses python-mutagen: writes Ogg Vorbis Comments directly into the file.
+set_opus_metadata() {
+    local file="$1"
+    local title="$2"
+    local artist="$3"
 
-    if [[ ! -f "$datei" ]]; then
-        warnung "Ausgabedatei nicht gefunden, Metadaten konnten nicht gesetzt werden: ${datei}"
+    if [[ ! -f "$file" ]]; then
+        warning "Output file not found, could not set metadata: ${file}"
         return
     fi
 
-    info "Setze Metadaten auf ${FETT}$(basename "$datei")${RESET} ..."
+    info "Setting metadata on ${BOLD}$(basename "$file")${RESET} ..."
 
-    if python3 - "$datei" "$titel" "$kuenstler" << 'PYEOF'
+    if python3 - "$file" "$title" "$artist" << 'PYEOF'
 import sys
 from mutagen.oggopus import OggOpus
 
-datei, titel, kuenstler = sys.argv[1], sys.argv[2], sys.argv[3]
+file, title, artist = sys.argv[1], sys.argv[2], sys.argv[3]
 
-audio = OggOpus(datei)
-audio["TITLE"]  = [titel]
-audio["ALBUM"]  = [titel]
-if kuenstler:
-    audio["ARTIST"]      = [kuenstler]
-    audio["ALBUMARTIST"] = [kuenstler]
+audio = OggOpus(file)
+audio["TITLE"]  = [title]
+audio["ALBUM"]  = [title]
+if artist:
+    audio["ARTIST"]      = [artist]
+    audio["ALBUMARTIST"] = [artist]
 audio.save()
 PYEOF
     then
-        erfolg "Metadaten gesetzt: TITLE=${titel}${kuenstler:+, ARTIST=${kuenstler}}"
+        success "Metadata set: TITLE=${title}${artist:+, ARTIST=${artist}}"
     else
-        warnung "Metadaten konnten nicht gesetzt werden (Datei bleibt ungetaggt)."
+        warning "Failed to set metadata (file will remain untagged)."
     fi
 }
 
-# ─── Hauptprogramm ────────────────────────────────────────────────────────────
-main() {
-    local start_gesamt=$SECONDS
+# ─── Help ─────────────────────────────────────────────────────────────────────
+show_help() {
+    cat << 'EOF'
+Usage: rip.sh [OPTIONS] [OUTPUT_DIRECTORY]
 
-    # Ausgabeverzeichnis aus erstem Parameter oder aktuelles Verzeichnis
-    local ausgabeverzeichnis
+Rips an audio CD to Opus files using abcde + cdparanoia.
+Album metadata is fetched automatically from MusicBrainz.
+
+OPTIONS
+  -h, --help    Show this help and exit
+
+OUTPUT_DIRECTORY
+  Directory where the Opus file(s) will be placed.
+  Created automatically if it does not exist.
+  Defaults to the current directory.
+
+OUTPUT MODES (chosen interactively)
+  Single file    All tracks merged into one .opus file — ideal for audiobooks
+                 and audio dramas. Metadata is applied via python-mutagen.
+  Per track      One .opus file per track inside a named subfolder.
+                 Track metadata is fetched from MusicBrainz by abcde.
+
+EXAMPLES
+  rip.sh                        Rip to current directory
+  rip.sh ~/music                Rip to ~/music
+  rip.sh ~/audiobooks           Rip audiobook CD to ~/audiobooks
+EOF
+}
+
+# ─── Main ─────────────────────────────────────────────────────────────────────
+main() {
+    local start_total=$SECONDS
+
+    # Output directory from first argument or current directory
+    local output_dir
     if [[ $# -ge 1 ]]; then
-        ausgabeverzeichnis="$1"
-        if [[ ! -d "$ausgabeverzeichnis" ]]; then
-            mkdir -p "$ausgabeverzeichnis" || {
-                fehler "Ausgabeverzeichnis konnte nicht erstellt werden: ${ausgabeverzeichnis}"
+        if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+            show_help
+            exit 0
+        fi
+        output_dir="$1"
+        if [[ ! -d "$output_dir" ]]; then
+            mkdir -p "$output_dir" || {
+                error "Could not create output directory: ${output_dir}"
                 exit 1
             }
         fi
-        ausgabeverzeichnis="$(realpath "$ausgabeverzeichnis")"
+        output_dir="$(realpath "$output_dir")"
     else
-        ausgabeverzeichnis="$(pwd)"
+        output_dir="$(pwd)"
     fi
 
     clear
     echo ""
-    echo -e "${FETT}${BLAU}╔══════════════════════════════════════════╗${RESET}"
-    echo -e "${FETT}${BLAU}║       CD-Ripper  →  Opus-Encoder         ║${RESET}"
-    echo -e "${FETT}${BLAU}╚══════════════════════════════════════════╝${RESET}"
+    echo -e "${BOLD}${BLUE}╔══════════════════════════════════════════╗${RESET}"
+    echo -e "${BOLD}${BLUE}║       CD Ripper  →  Opus Encoder         ║${RESET}"
+    echo -e "${BOLD}${BLUE}╚══════════════════════════════════════════╝${RESET}"
     echo ""
 
-    # 1. Abhängigkeiten prüfen
-    trennlinie
-    info "Prüfe Systemvoraussetzungen ..."
-    pruefe_abhaengigkeiten
+    # 1. Check dependencies
+    separator
+    info "Checking system requirements ..."
+    check_dependencies
     echo ""
 
-    # 2. CD-Laufwerk finden
+    # 2. Find CD drive
     local cdrom_device
-    cdrom_device=$(finde_laufwerk)
-    erfolg "CD-ROM-Laufwerk gefunden: ${FETT}${cdrom_device}${RESET}"
+    cdrom_device=$(find_drive)
+    success "CD-ROM drive found: ${BOLD}${cdrom_device}${RESET}"
 
-    # 3. Medium prüfen
-    pruefe_medium "$cdrom_device"
+    # 3. Check medium
+    check_medium "$cdrom_device"
     echo ""
 
-    # 4. MusicBrainz-Abfrage (best-effort, still bei Fehler)
-    trennlinie
-    echo -e "${FETT}Einstellungen:${RESET}"
+    # 4. MusicBrainz lookup (best-effort, silent on failure)
+    separator
+    echo -e "${BOLD}Settings:${RESET}"
     echo ""
 
-    local cd_titel=""
-    local mb_artist=""   # ggf. leer, wenn kein MB-Eintrag oder kein Künstler bekannt
+    local cd_title=""
+    local mb_artist=""   # may be empty if no MB entry or no artist known
     local mb_info=""
 
-    info "Suche CD in MusicBrainz-Datenbank ..."
-    mb_info=$(ermittle_mb_info "$cdrom_device" 2>/dev/null) || mb_info=""
+    info "Looking up CD in MusicBrainz database ..."
+    mb_info=$(get_mb_info "$cdrom_device" 2>/dev/null) || mb_info=""
 
     if [[ -n "$mb_info" ]]; then
-        local mb_titel
-        mb_titel=$(echo "$mb_info" | cut -f1)
+        local mb_title
+        mb_title=$(echo "$mb_info" | cut -f1)
         mb_artist=$(echo "$mb_info" | cut -f2)
 
         echo ""
         if [[ -n "$mb_artist" ]]; then
-            erfolg "MusicBrainz-Eintrag gefunden: ${FETT}${mb_titel}${RESET} (${mb_artist})"
+            success "MusicBrainz entry found: ${BOLD}${mb_title}${RESET} (${mb_artist})"
         else
-            erfolg "MusicBrainz-Eintrag gefunden: ${FETT}${mb_titel}${RESET}"
+            success "MusicBrainz entry found: ${BOLD}${mb_title}${RESET}"
         fi
         echo ""
 
         local override=""
-        read -r -p "$(echo -e "  Eigenen Titel eingeben? (leer lassen = MusicBrainz-Titel übernehmen): ")" override
+        read -r -p "$(echo -e "  Enter custom title? (leave empty to keep MusicBrainz title): ")" override
 
         if [[ -n "$override" ]]; then
-            cd_titel="$override"
+            cd_title="$override"
         else
-            cd_titel="$mb_titel"
+            cd_title="$mb_title"
         fi
     else
-        warnung "Kein MusicBrainz-Eintrag gefunden (kein Netz, unbekannte CD, oder Timeout)."
+        warning "No MusicBrainz entry found (no network, unknown CD, or timeout)."
         echo ""
 
-        while [[ -z "$cd_titel" ]]; do
-            read -r -p "$(echo -e "  ${FETT}CD-Titel:${RESET} ")" cd_titel
-            if [[ -z "$cd_titel" ]]; then
-                warnung "Der Titel darf nicht leer sein. Bitte erneut eingeben."
+        while [[ -z "$cd_title" ]]; do
+            read -r -p "$(echo -e "  ${BOLD}CD title:${RESET} ")" cd_title
+            if [[ -z "$cd_title" ]]; then
+                warning "Title must not be empty. Please try again."
             fi
         done
     fi
 
     local safe_title
-    safe_title=$(bereinige_titel "$cd_titel")
+    safe_title=$(sanitize_title "$cd_title")
 
     echo ""
-    if [[ "$safe_title" != "$cd_titel" ]]; then
-        info "Titel für Dateinamen angepasst: ${FETT}${safe_title}${RESET}"
+    if [[ "$safe_title" != "$cd_title" ]]; then
+        info "Title adjusted for filename: ${BOLD}${safe_title}${RESET}"
     else
-        info "Titel: ${FETT}${safe_title}${RESET}"
+        info "Title: ${BOLD}${safe_title}${RESET}"
     fi
 
-    # 5. Einzeldatei oder Einzeltracks?
+    # 5. Single file or individual tracks?
     echo ""
-    local einzeldatei=false
-    local modus_antwort=""
-    read -r -p "$(echo -e "  ${FETT}Alle Tracks zu einer einzigen Opus-Datei zusammenfassen?${RESET} [j/N]: ")" modus_antwort
+    local single_file=false
+    local mode_answer=""
+    read -r -p "$(echo -e "  ${BOLD}Combine all tracks into a single Opus file?${RESET} [y/N]: ")" mode_answer
 
-    if [[ "${modus_antwort,,}" == "y" || "${modus_antwort,,}" == "j" || "${modus_antwort,,}" == "Y" || "${modus_antwort,,}" == "J" || "${modus_antwort,,}" == "ja" ]]; then
-        einzeldatei=true
-        info "Modus: ${FETT}Einzeldatei${RESET} → ${FETT}${safe_title}.opus${RESET}"
-        info "MusicBrainz wird beim Rippen übersprungen; Metadaten werden danach gesetzt."
+    if [[ "${mode_answer,,}" == "y" || "${mode_answer,,}" == "j" || "${mode_answer,,}" == "yes" || "${mode_answer,,}" == "ja" ]]; then
+        single_file=true
+        info "Mode: ${BOLD}Single file${RESET} → ${BOLD}${safe_title}.opus${RESET}"
+        info "MusicBrainz skipped during ripping; metadata will be set afterward."
     else
-        info "Modus: ${FETT}Einzelne Tracks${RESET} → Ordner ${FETT}${safe_title}/${RESET}"
+        info "Mode: ${BOLD}Individual tracks${RESET} → folder ${BOLD}${safe_title}/${RESET}"
     fi
 
-    info "Ausgabeverzeichnis: ${FETT}${ausgabeverzeichnis}${RESET}"
+    info "Output directory: ${BOLD}${output_dir}${RESET}"
 
-    # 6. Im Mehrspurdatei-Modus Perl-Module prüfen (werden von abcde-musicbrainz-tool benötigt)
-    if [[ "$einzeldatei" == false ]]; then
-        pruefe_perl_module
+    # 6. In multi-track mode, check Perl modules (needed by abcde-musicbrainz-tool)
+    if [[ "$single_file" == false ]]; then
+        check_perl_modules
     fi
 
-    # 7. Ripping bestätigen
+    # 7. Confirm ripping
     echo ""
-    local rippen_antwort=""
-    read -r -p "$(echo -e "  ${FETT}Jetzt rippen?${RESET} [J/n]: ")" rippen_antwort
+    local rip_answer=""
+    read -r -p "$(echo -e "  ${BOLD}Start ripping now?${RESET} [Y/n]: ")" rip_answer
 
-    if [[ "${rippen_antwort,,}" == "n" ||  "${rippen_antwort,,}" == "N" || "${rippen_antwort,,}" == "nein" ]]; then
-        info "Abgebrochen. Keine Dateien wurden erstellt."
+    if [[ "${rip_answer,,}" == "n" || "${rip_answer,,}" == "no" || "${rip_answer,,}" == "nein" ]]; then
+        info "Aborted. No files were created."
         exit 0
     fi
 
     echo ""
 
-    # 8. Konfiguration schreiben
-    trennlinie
-    local cpu_kerne
-    cpu_kerne=$(nproc)
-    info "Erstelle abcde-Konfiguration (${cpu_kerne} CPU-Kerne, Opus 192 kbps) ..."
-    schreibe_abcde_config "$safe_title" "$einzeldatei" "$ausgabeverzeichnis"
-    erfolg "Konfiguration bereit."
+    # 8. Write configuration
+    separator
+    local cpu_cores
+    cpu_cores=$(nproc)
+    info "Creating abcde configuration (${cpu_cores} CPU cores, Opus 192 kbps) ..."
+    write_abcde_config "$safe_title" "$single_file" "$output_dir"
+    success "Configuration ready."
     echo ""
 
-    # 9. abcde starten
-    trennlinie
+    # 9. Start abcde
+    separator
     echo ""
-    echo -e "${FETT}Starte CD-Ripping-Prozess ...${RESET}"
-    if [[ "$einzeldatei" == false ]]; then
-        echo -e "${GELB}Hinweis:${RESET} Trackinformationen bei Bedarf interaktiv bestätigen."
+    echo -e "${BOLD}Starting CD ripping process ...${RESET}"
+    if [[ "$single_file" == false ]]; then
+        echo -e "${YELLOW}Note:${RESET} Confirm track information interactively if prompted."
     fi
     echo ""
 
     local start_rip=$SECONDS
-    if [[ "$einzeldatei" == true ]]; then
+    if [[ "$single_file" == true ]]; then
         abcde -d "$cdrom_device" -o opus -1
     else
         abcde -d "$cdrom_device" -o opus
     fi
-    local dauer_rip=$(( SECONDS - start_rip ))
+    local duration_rip=$(( SECONDS - start_rip ))
 
-    # 10. Metadaten auf kombinierte Datei setzen (nur Einzeldatei-Modus)
-    local dauer_merge=0
-    if [[ "$einzeldatei" == true ]]; then
+    # 10. Set metadata on combined file (single-file mode only)
+    local duration_merge=0
+    if [[ "$single_file" == true ]]; then
         echo ""
-        trennlinie
+        separator
         local start_merge=$SECONDS
-        setze_opus_metadaten \
-            "${ausgabeverzeichnis}/${safe_title}.opus" \
-            "$cd_titel" \
+        set_opus_metadata \
+            "${output_dir}/${safe_title}.opus" \
+            "$cd_title" \
             "$mb_artist"
-        dauer_merge=$(( SECONDS - start_merge ))
+        duration_merge=$(( SECONDS - start_merge ))
     fi
 
-    # 11. Erfolgsmeldung
-    local dauer_gesamt=$(( SECONDS - start_gesamt ))
+    # 11. Summary
+    local duration_total=$(( SECONDS - start_total ))
     echo ""
-    trennlinie
-    erfolg "${FETT}Ripping abgeschlossen!${RESET}"
+    separator
+    success "${BOLD}Ripping complete!${RESET}"
     echo ""
 
-    if [[ "$einzeldatei" == true ]]; then
-        local ausgabedatei="${ausgabeverzeichnis}/${safe_title}.opus"
-        if [[ -f "$ausgabedatei" ]]; then
-            local groesse
-            groesse=$(dateigrösse "$ausgabedatei")
-            erfolg "Datei gespeichert: ${FETT}${ausgabedatei}${RESET}"
-            erfolg "Dateigröße:        ${FETT}${groesse}${RESET}"
+    if [[ "$single_file" == true ]]; then
+        local output_file="${output_dir}/${safe_title}.opus"
+        if [[ -f "$output_file" ]]; then
+            local size
+            size=$(file_size "$output_file")
+            success "File saved:  ${BOLD}${output_file}${RESET}"
+            success "File size:   ${BOLD}${size}${RESET}"
         else
-            info "Datei sollte sich befinden in: ${FETT}${ausgabeverzeichnis}/${RESET}"
-            warnung "Dateiname kann leicht abweichen."
+            info "File should be located in: ${BOLD}${output_dir}/${RESET}"
+            warning "Filename may differ slightly."
         fi
     else
-        local ausgabeordner="${ausgabeverzeichnis}/${safe_title}"
-        if [[ -d "$ausgabeordner" ]]; then
-            local anzahl groesse
-            anzahl=$(find "$ausgabeordner" -name "*.opus" 2>/dev/null | wc -l)
-            groesse=$(dateigrösse "$ausgabeordner")
-            erfolg "Dateien gespeichert in: ${FETT}${ausgabeordner}/${RESET}"
-            erfolg "${anzahl} Opus-Datei(en), Gesamtgröße: ${FETT}${groesse}${RESET}"
+        local out_folder="${output_dir}/${safe_title}"
+        if [[ -d "$out_folder" ]]; then
+            local count size
+            count=$(find "$out_folder" -name "*.opus" 2>/dev/null | wc -l)
+            size=$(file_size "$out_folder")
+            success "Files saved to: ${BOLD}${out_folder}/${RESET}"
+            success "${count} Opus file(s), total size: ${BOLD}${size}${RESET}"
         else
-            info "Dateien sollten sich befinden in: ${FETT}${ausgabeverzeichnis}/${RESET}"
-            warnung "Ordnername kann je nach Metadaten leicht abweichen."
+            info "Files should be located in: ${BOLD}${output_dir}/${RESET}"
+            warning "Folder name may differ slightly depending on metadata."
         fi
     fi
 
     echo ""
-    echo -e "  ${FETT}Laufzeiten:${RESET}"
-    echo -e "    Rippen/Kodieren:  $(formatiere_dauer "$dauer_rip")"
-    if [[ "$einzeldatei" == true ]]; then
-        echo -e "    Mergen/Metadaten: $(formatiere_dauer "$dauer_merge")"
+    echo -e "  ${BOLD}Elapsed time:${RESET}"
+    echo -e "    Ripping/encoding:  $(format_duration "$duration_rip")"
+    if [[ "$single_file" == true ]]; then
+        echo -e "    Merging/metadata:  $(format_duration "$duration_merge")"
     fi
-    echo -e "    Gesamt:           $(formatiere_dauer "$dauer_gesamt")"
+    echo -e "    Total:             $(format_duration "$duration_total")"
     echo ""
 }
 

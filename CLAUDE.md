@@ -11,7 +11,7 @@ This directory contains tooling to rip audio CDs to Opus files on Linux/Manjaro,
 ### `rip.sh` – CD ripping
 
 ```bash
-./rip.sh [AUSGABEVERZEICHNIS]
+./rip.sh [OUTPUT_DIRECTORY]
 ```
 
 Rips an audio CD using `abcde` + `cdparanoia` and encodes to Opus 192 kbps. If no output directory is given, files land in the current working directory.
@@ -31,8 +31,8 @@ Rips an audio CD using `abcde` + `cdparanoia` and encodes to Opus 192 kbps. If n
 
 ## Key implementation details
 
-- `bereinige_titel()` sanitises titles for Windows-compatible paths: `/`→`-`, `:`→`_`, spaces→`_`, removes `*?"<>|\,&`, strips leading/trailing `._-`, collapses repeated `_`.
-- `schreibe_abcde_config()` generates `~/.abcde.conf` at runtime with `MAXPROCS=$(nproc)` and `LOWDISK=n` for parallel rip+encode.
+- `sanitize_title()` sanitises titles for Windows-compatible paths: `/`→`-`, `:`→`_`, spaces→`_`, removes `*?"<>|\,&`, strips leading/trailing `._-`, collapses repeated `_`.
+- `write_abcde_config()` generates `~/.abcde.conf` at runtime with `MAXPROCS=$(nproc)` and `LOWDISK=n` for parallel rip+encode.
 - `$SECONDS` (bash built-in) is used for elapsed-time tracking; output is formatted as `M:SS` / `H:MM:SS`.
 
 ## Runtime dependencies
