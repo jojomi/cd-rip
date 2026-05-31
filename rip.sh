@@ -389,23 +389,28 @@ Rips an audio CD to Opus files using abcde + cdparanoia.
 Album metadata is fetched automatically from MusicBrainz.
 
 OPTIONS
-  -h, --help    Show this help and exit
+  -h, --help            Show this help and exit
+  -t, --title TITLE     Set CD title (skips MusicBrainz lookup and title prompt)
+  -a, --artist ARTIST   Set artist name
+  -1, --single          Single-file mode (all tracks merged into one Opus file)
+  -m, --multi           Multi-track mode (one file per track)
+  -y, --yes             Skip confirmation prompt and start ripping immediately
 
 OUTPUT_DIRECTORY
   Directory where the Opus file(s) will be placed.
   Created automatically if it does not exist.
   Defaults to the current directory.
 
-OUTPUT MODES (chosen interactively)
+OUTPUT MODES (chosen interactively unless --single or --multi is given)
   Single file    All tracks merged into one .opus file — ideal for audiobooks
                  and audio dramas. Metadata is applied via python-mutagen.
   Per track      One .opus file per track inside a named subfolder.
                  Track metadata is fetched from MusicBrainz by abcde.
 
 EXAMPLES
-  rip.sh                        Rip to current directory
-  rip.sh ~/music                Rip to ~/music
-  rip.sh ~/audiobooks           Rip audiobook CD to ~/audiobooks
+  rip.sh                                          Rip to current directory
+  rip.sh ~/music                                  Rip to ~/music
+  rip.sh -t "My Album" -1 -y ~/audiobooks         Non-interactive single-file rip
 EOF
 }
 
@@ -413,14 +418,43 @@ EOF
 main() {
     local start_total=$SECONDS
 
-    # Output directory from first argument or current directory
-    local output_dir
-    if [[ $# -ge 1 ]]; then
-        if [[ "$1" == "--help" || "$1" == "-h" ]]; then
-            show_help
-            exit 0
-        fi
-        output_dir="$1"
+    # ── Argument parsing ──────────────────────────────────────────────────────
+    local param_title=""
+    local param_artist=""
+    local param_mode=""   # "single" | "multi" | ""
+    local param_yes=false
+    local output_dir=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                show_help; exit 0 ;;
+            -t|--title)
+                [[ $# -lt 2 ]] && { error "--title requires an argument"; exit 1; }
+                param_title="$2"; shift 2 ;;
+            -a|--artist)
+                [[ $# -lt 2 ]] && { error "--artist requires an argument"; exit 1; }
+                param_artist="$2"; shift 2 ;;
+            -1|--single)
+                param_mode="single"; shift ;;
+            -m|--multi)
+                param_mode="multi"; shift ;;
+            -y|--yes)
+                param_yes=true; shift ;;
+            -*)
+                error "Unknown option: $1"; echo ""; show_help; exit 1 ;;
+            *)
+                if [[ -z "$output_dir" ]]; then
+                    output_dir="$1"
+                else
+                    error "Unexpected argument: $1"; exit 1
+                fi
+                shift ;;
+        esac
+    done
+
+    # Resolve output directory
+    if [[ -n "$output_dir" ]]; then
         if [[ ! -d "$output_dir" ]]; then
             mkdir -p "$output_dir" || {
                 error "Could not create output directory: ${output_dir}"
@@ -460,43 +494,52 @@ main() {
     echo ""
 
     local cd_title=""
-    local mb_artist=""   # may be empty if no MB entry or no artist known
+    local mb_artist="${param_artist}"
     local mb_info=""
 
-    info "Looking up CD in MusicBrainz database ..."
-    mb_info=$(get_mb_info "$cdrom_device" 2>/dev/null) || mb_info=""
-
-    if [[ -n "$mb_info" ]]; then
-        local mb_title
-        mb_title=$(echo "$mb_info" | cut -f1)
-        mb_artist=$(echo "$mb_info" | cut -f2)
-
-        echo ""
+    if [[ -n "$param_title" ]]; then
+        cd_title="$param_title"
         if [[ -n "$mb_artist" ]]; then
-            success "MusicBrainz entry found: ${BOLD}${mb_title}${RESET} (${mb_artist})"
+            success "Title (from parameter): ${BOLD}${cd_title}${RESET} (${mb_artist})"
         else
-            success "MusicBrainz entry found: ${BOLD}${mb_title}${RESET}"
-        fi
-        echo ""
-
-        local override=""
-        read -r -p "$(echo -e "  Enter custom title? (leave empty to keep MusicBrainz title): ")" override
-
-        if [[ -n "$override" ]]; then
-            cd_title="$override"
-        else
-            cd_title="$mb_title"
+            success "Title (from parameter): ${BOLD}${cd_title}${RESET}"
         fi
     else
-        warning "No MusicBrainz entry found (no network, unknown CD, or timeout)."
-        echo ""
+        info "Looking up CD in MusicBrainz database ..."
+        mb_info=$(get_mb_info "$cdrom_device" 2>/dev/null) || mb_info=""
 
-        while [[ -z "$cd_title" ]]; do
-            read -r -p "$(echo -e "  ${BOLD}CD title:${RESET} ")" cd_title
-            if [[ -z "$cd_title" ]]; then
-                warning "Title must not be empty. Please try again."
+        if [[ -n "$mb_info" ]]; then
+            local mb_title
+            mb_title=$(echo "$mb_info" | cut -f1)
+            [[ -z "$mb_artist" ]] && mb_artist=$(echo "$mb_info" | cut -f2)
+
+            echo ""
+            if [[ -n "$mb_artist" ]]; then
+                success "MusicBrainz entry found: ${BOLD}${mb_title}${RESET} (${mb_artist})"
+            else
+                success "MusicBrainz entry found: ${BOLD}${mb_title}${RESET}"
             fi
-        done
+            echo ""
+
+            local override=""
+            read -r -p "$(echo -e "  Enter custom title? (leave empty to keep MusicBrainz title): ")" override
+
+            if [[ -n "$override" ]]; then
+                cd_title="$override"
+            else
+                cd_title="$mb_title"
+            fi
+        else
+            warning "No MusicBrainz entry found (no network, unknown CD, or timeout)."
+            echo ""
+
+            while [[ -z "$cd_title" ]]; do
+                read -r -p "$(echo -e "  ${BOLD}CD title:${RESET} ")" cd_title
+                if [[ -z "$cd_title" ]]; then
+                    warning "Title must not be empty. Please try again."
+                fi
+            done
+        fi
     fi
 
     local safe_title
@@ -512,15 +555,24 @@ main() {
     # 5. Single file or individual tracks?
     echo ""
     local single_file=false
-    local mode_answer=""
-    read -r -p "$(echo -e "  ${BOLD}Combine all tracks into a single Opus file?${RESET} [y/N]: ")" mode_answer
-
-    if [[ "${mode_answer,,}" == "y" || "${mode_answer,,}" == "j" || "${mode_answer,,}" == "yes" || "${mode_answer,,}" == "ja" ]]; then
+    if [[ "$param_mode" == "single" ]]; then
         single_file=true
-        info "Mode: ${BOLD}Single file${RESET} → ${BOLD}${safe_title}.opus${RESET}"
+        info "Mode: ${BOLD}Single file${RESET} → ${BOLD}${safe_title}.opus${RESET} (from parameter)"
         info "MusicBrainz skipped during ripping; metadata will be set afterward."
+    elif [[ "$param_mode" == "multi" ]]; then
+        single_file=false
+        info "Mode: ${BOLD}Individual tracks${RESET} → folder ${BOLD}${safe_title}/${RESET} (from parameter)"
     else
-        info "Mode: ${BOLD}Individual tracks${RESET} → folder ${BOLD}${safe_title}/${RESET}"
+        local mode_answer=""
+        read -r -p "$(echo -e "  ${BOLD}Combine all tracks into a single Opus file?${RESET} [y/N]: ")" mode_answer
+
+        if [[ "${mode_answer,,}" == "y" || "${mode_answer,,}" == "j" || "${mode_answer,,}" == "yes" || "${mode_answer,,}" == "ja" ]]; then
+            single_file=true
+            info "Mode: ${BOLD}Single file${RESET} → ${BOLD}${safe_title}.opus${RESET}"
+            info "MusicBrainz skipped during ripping; metadata will be set afterward."
+        else
+            info "Mode: ${BOLD}Individual tracks${RESET} → folder ${BOLD}${safe_title}/${RESET}"
+        fi
     fi
 
     info "Output directory: ${BOLD}${output_dir}${RESET}"
@@ -532,12 +584,16 @@ main() {
 
     # 7. Confirm ripping
     echo ""
-    local rip_answer=""
-    read -r -p "$(echo -e "  ${BOLD}Start ripping now?${RESET} [Y/n]: ")" rip_answer
+    if [[ "$param_yes" == true ]]; then
+        info "Auto-confirmed (--yes)."
+    else
+        local rip_answer=""
+        read -r -p "$(echo -e "  ${BOLD}Start ripping now?${RESET} [Y/n]: ")" rip_answer
 
-    if [[ "${rip_answer,,}" == "n" || "${rip_answer,,}" == "no" || "${rip_answer,,}" == "nein" ]]; then
-        info "Aborted. No files were created."
-        exit 0
+        if [[ "${rip_answer,,}" == "n" || "${rip_answer,,}" == "no" || "${rip_answer,,}" == "nein" ]]; then
+            info "Aborted. No files were created."
+            exit 0
+        fi
     fi
 
     echo ""
